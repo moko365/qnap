@@ -19,6 +19,7 @@
 #include <asm/io.h>
 #include <asm/uaccess.h>
 
+#define	BUF_SIZE 8
 #define CDATA_MAJOR 121
 
 struct cdata_t {
@@ -43,7 +44,17 @@ static int cdata_open(struct inode *inode, struct file *filp)
 
 static int cdata_close(struct inode *inode, struct file *filp)
 {
-	printk(KERN_ALERT "cdata in close\n");
+	struct cdata_t *cdata = (struct cdata_t *)filp->private_data;
+	int idx;
+
+	idx = cdata->idx;
+
+	cdata->buf[idx] = '\0';
+	printk(KERN_ALERT "data in buffer: %s\n", cdata->buf);
+
+	kfree(cdata->buf);
+	kfree(cdata);
+
 	return 0;
 }
 
@@ -57,7 +68,7 @@ static ssize_t cdata_write(struct file *filp, const char __user *buf,
 	idx = cdata->idx;
 
 	for (i = 0; i < count; i++) {
-		if (idx >= 8)
+		if (idx >= (BUF_SIZE -1 ))
 			return -1;
 		cdata->buf[idx] = buf[i];
 		idx++;
