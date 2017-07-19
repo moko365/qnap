@@ -25,7 +25,19 @@
 struct cdata_t {
 	char *buf;
 	int idx;
+	wait_queue_head_t wait;
+	struct work_struct work;
 };
+
+void flush_buffer(struct work_struct *work);
+
+void flush_buffer(struct work_struct *work)
+{
+	struct cdata_t *cdata = container_of(work, struct cdata_t, work);
+
+	cdata->idx = 0;
+	wake_up(&cdata->wait);
+}
 
 static int cdata_open(struct inode *inode, struct file *filp)
 {
@@ -33,14 +45,11 @@ static int cdata_open(struct inode *inode, struct file *filp)
 
 	printk(KERN_ALERT "cdata in open: filp = %p\n", filp);
 
-	while(1) {	
-		current->state = TASK_UNINTERRUPTIBLE;
-		schedule();
-	}
-
 	cdata = kmalloc(sizeof(*cdata), GFP_KERNEL);
 	cdata->buf = kmalloc(8, GFP_KERNEL);
 	cdata->idx = 0;
+	init_waitqueue_head(&cdata->wait);
+	INIT_WORK(&cdata->work, flush_buffer);
 
 	filp->private_data = (void *)cdata;
 	
@@ -69,14 +78,19 @@ static ssize_t cdata_write(struct file *filp, const char __user *buf,
 	struct cdata_t *cdata = (struct cdata_t *)filp->private_data;
 	int idx;
 	int i;
-	
+	 DECLARE_WAITQUEUE(wait, current);
+
 	idx = cdata->idx;
 
 	for (i = 0; i < count; i++) {
 		if (idx >= (BUF_SIZE -1 )) {
 			// The buffer is full: make a context-switch
+			add_wait_queue(&cdata->wait, &wait);
 			current->state = TASK_UNINTERRUPTIBLE;
+			schedule_work(&cdata->work);
 			schedule();
+			remove_wait_queue(&cdata->wait, &wait);
+			idx = cdata->idx;
 		}
 		copy_from_user(&cdata->buf[idx], &buf[i], 1);
 		idx++;
