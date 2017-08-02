@@ -103,6 +103,8 @@ void write_framebuffer_with_work(struct work_struct *work)
 
 	cdata->idx = 0;
 	wake_up_interruptible(&cdata->writeable);
+
+	printk(KERN_INFO "cdata: wake up process");
 }
 
 void *write_framebuffer_with_timer(unsigned long arg)
@@ -146,7 +148,13 @@ repeat:
 			add_wait_queue(&cdata->writeable, &wait);
 			current->state = TASK_INTERRUPTIBLE;
 
-			schedule_work(&cdata->work);
+			//schedule_work(&cdata->work);
+			timer->function = write_framebuffer_with_timer;
+			timer->data = (unsigned long)cdata;
+			//timer->expires = jiffies + 10*HZ;
+			//add_timer(timer);
+			mod_timer(timer, jiffies + 10*HZ);
+
 			mutex_unlock(&cdata->write_lock);
 
 			schedule();
