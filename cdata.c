@@ -134,26 +134,31 @@ static ssize_t cdata_write(struct file *filp, const char __user *user,
 {
 	struct cdata_t *cdata = (struct cdata_t *)filp->private_data;
 	DECLARE_WAITQUEUE(wait, current);
-	struct timer_list *timer;
+	struct timer_list timer;
 	int i;
 	int idx;
 
 	mutex_lock_interruptible(&cdata->write_lock);
+	init_timer(&timer);
 	idx = cdata->idx;
-	timer = &cdata->timer;
 
 	for (i = 0; i < size; i++) {
 		if (idx > (BUF_SIZE - 1)) {
 repeat:
-			add_wait_queue(&cdata->writeable, &wait);
-			current->state = TASK_INTERRUPTIBLE;
+			//add_wait_queue(&cdata->writeable, &wait);
+			//current->state = TASK_INTERRUPTIBLE;
+			prepare_to_wait(&cdata->writeable, &wait, TASK_INTERRUPTIBLE);
 
 			//schedule_work(&cdata->work);
-			timer->function = write_framebuffer_with_timer;
-			timer->data = (unsigned long)cdata;
+			//timer->function = write_framebuffer_with_timer;
+			//timer->data = (unsigned long)cdata;
 			//timer->expires = jiffies + 10*HZ;
-			//add_timer(timer);
-			mod_timer(timer, jiffies + 10*HZ);
+			//mod_timer(timer, jiffies + 10*HZ);
+
+			timer.function = write_framebuffer_with_timer;
+			timer.data = (unsigned long)cdata;
+			timer.expires = jiffies + 10*HZ;
+			add_timer(&timer);
 
 			mutex_unlock(&cdata->write_lock);
 
