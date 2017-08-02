@@ -10,8 +10,6 @@
 #include <linux/timer.h>
 #include <linux/mm.h>
 #include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/miscdevice.h>
 #include <linux/input.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
@@ -22,23 +20,41 @@
 #define	BUF_SIZE 8
 #define CDATA_MAJOR 121
 
+#define USE_TIMER 1
+
 struct cdata_t {
 	char *buf;
 	int idx;
 	wait_queue_head_t wait;
 	struct timer_list timer;
-	struct mutex write_lock;
+	struct work_struct work;
 };
 
-void flush_buffer(unsigned long arg);
-
-void flush_buffer(unsigned long arg)
+#ifdef USE_TIMER
+void flush_buffer_timer(unsigned long arg);
+void flush_buffer_timer(unsigned long arg)
 {
 	struct cdata_t *cdata = (struct cdata_t *)arg;
+
+	cdata->buf[BUF_SIZE-1] = '\0';
+	printk(KERN_INFO "buf = %s\n", cdata->buf);
 
 	cdata->idx = 0;
 	wake_up(&cdata->wait);
 }
+#else
+void flush_buffer(struct work_struct *work);
+void flush_buffer(struct work_struct *work)
+{
+	struct cdata_t *cdata = container_of(work, struct cdata_t, work);
+
+	cdata->buf[BUF_SIZE-1] = '\0';
+	printk(KERN_INFO "buf = %s\n", cdata->buf);
+
+	cdata->idx = 0;
+	wake_up(&cdata->wait);
+}
+#endif
 
 static int cdata_open(struct inode *inode, struct file *filp)
 {
@@ -50,9 +66,11 @@ static int cdata_open(struct inode *inode, struct file *filp)
 	cdata->buf = kmalloc(8, GFP_KERNEL);
 	cdata->idx = 0;
 	init_waitqueue_head(&cdata->wait);
+#ifdef USE_TIMER
 	init_timer(&cdata->timer);
-	mutex_init(&cdata->write_lock);
-
+#else
+	INIT_WORK(&cdata->work, flush_buffer);
+#endif
 	filp->private_data = (void *)cdata;
 	
 	return 0;
@@ -68,7 +86,6 @@ static int cdata_close(struct inode *inode, struct file *filp)
 	cdata->buf[idx] = '\0';
 	printk(KERN_ALERT "data in buffer: %s\n", cdata->buf);
 
-	del_timer(&cdata->timer);
 	kfree(cdata->buf);
 	kfree(cdata);
 
@@ -81,41 +98,38 @@ static ssize_t cdata_write(struct file *filp, const char __user *buf,
 	struct cdata_t *cdata = (struct cdata_t *)filp->private_data;
 	int idx;
 	int i;
-	DECLARE_WAITQUEUE(wait, current);
+#ifdef USE_TIMER
+	struct timer_list *timer;
+#endif
+	 DECLARE_WAITQUEUE(wait, current);
 
-	mutex_lock_interruptible(&cdata->write_lock);
+#ifdef USE_TIMER
+	timer = &cdata->timer;
+#endif
 	idx = cdata->idx;
 
 	for (i = 0; i < count; i++) {
 		if (idx >= (BUF_SIZE -1 )) {
-			printk(KERN_ALERT "cdata: buffer full\n");
-
-repeat:
-			prepare_to_wait(&cdata->wait, &wait, TASK_INTERRUPTIBLE);
-			cdata->timer.function = flush_buffer;
-			cdata->timer.data = (unsigned long)cdata;
-			cdata->timer.expires = jiffies + 10*HZ;
-			add_timer(&cdata->timer);
-
-	mutex_unlock(&cdata->write_lock);
+			// The buffer is full: make a context-switch
+			add_wait_queue(&cdata->wait, &wait);
+			current->state = TASK_UNINTERRUPTIBLE;
+#ifdef USE_TIMER
+			timer->expires = 10*HZ;
+			timer->function = flush_buffer_timer;
+			timer->data = (unsigned long)cdata;
+			add_timer(timer);
+#else
+			schedule_work(&cdata->work);
+#endif
 			schedule();
-	mutex_lock_interruptible(&cdata->write_lock);
-
-			if (!signal_pending(current))
-				return -EINTR;
-
-			idx = cdata->idx;
-			if (idx >= (BUF_SIZE - 1)) goto repeat;
-
 			remove_wait_queue(&cdata->wait, &wait);
+			idx = cdata->idx;
 		}
 		copy_from_user(&cdata->buf[idx], &buf[i], 1);
-
 		idx++;
 	}
 
 	cdata->idx = idx;
-	mutex_unlock(&cdata->write_lock);
 
 	return 0;
 }

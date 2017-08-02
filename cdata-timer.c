@@ -10,8 +10,6 @@
 #include <linux/timer.h>
 #include <linux/mm.h>
 #include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/miscdevice.h>
 #include <linux/input.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
@@ -27,14 +25,14 @@ struct cdata_t {
 	int idx;
 	wait_queue_head_t wait;
 	struct timer_list timer;
-	struct mutex write_lock;
 };
 
-void flush_buffer(unsigned long arg);
-
-void flush_buffer(unsigned long arg)
+static void flush_buffer_timer(unsigned long arg)
 {
 	struct cdata_t *cdata = (struct cdata_t *)arg;
+
+	cdata->buf[BUF_SIZE-1] = '\0';
+	printk(KERN_INFO "buf = %s\n", cdata->buf);
 
 	cdata->idx = 0;
 	wake_up(&cdata->wait);
@@ -51,7 +49,6 @@ static int cdata_open(struct inode *inode, struct file *filp)
 	cdata->idx = 0;
 	init_waitqueue_head(&cdata->wait);
 	init_timer(&cdata->timer);
-	mutex_init(&cdata->write_lock);
 
 	filp->private_data = (void *)cdata;
 	
@@ -81,41 +78,32 @@ static ssize_t cdata_write(struct file *filp, const char __user *buf,
 	struct cdata_t *cdata = (struct cdata_t *)filp->private_data;
 	int idx;
 	int i;
-	DECLARE_WAITQUEUE(wait, current);
+	struct timer_list *timer;
+	 DECLARE_WAITQUEUE(wait, current);
 
-	mutex_lock_interruptible(&cdata->write_lock);
+	timer = &cdata->timer;
 	idx = cdata->idx;
 
 	for (i = 0; i < count; i++) {
 		if (idx >= (BUF_SIZE -1 )) {
-			printk(KERN_ALERT "cdata: buffer full\n");
+			// The buffer is full: make a context-switch
+			add_wait_queue(&cdata->wait, &wait);
+			current->state = TASK_UNINTERRUPTIBLE;
 
-repeat:
-			prepare_to_wait(&cdata->wait, &wait, TASK_INTERRUPTIBLE);
-			cdata->timer.function = flush_buffer;
-			cdata->timer.data = (unsigned long)cdata;
-			cdata->timer.expires = jiffies + 10*HZ;
-			add_timer(&cdata->timer);
+			timer->expires = 10*HZ;
+			timer->function = flush_buffer_timer;
+			timer->data = (unsigned long)cdata;
+			add_timer(timer);
 
-	mutex_unlock(&cdata->write_lock);
 			schedule();
-	mutex_lock_interruptible(&cdata->write_lock);
-
-			if (!signal_pending(current))
-				return -EINTR;
-
-			idx = cdata->idx;
-			if (idx >= (BUF_SIZE - 1)) goto repeat;
-
 			remove_wait_queue(&cdata->wait, &wait);
+			idx = cdata->idx;
 		}
 		copy_from_user(&cdata->buf[idx], &buf[i], 1);
-
 		idx++;
 	}
 
 	cdata->idx = idx;
-	mutex_unlock(&cdata->write_lock);
 
 	return 0;
 }

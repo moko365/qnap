@@ -7,10 +7,13 @@ int main(void)
     int fd;
     pid_t child;
 
+    fd = open("/dev/cdata-misc", O_RDWR);
     child = fork();
 
-    fd = open("/dev/cdata-misc", O_RDWR);
     write(fd, "he", 2);
     write(fd, "llo", 3);
+    write(fd, "llo", 3);
+    write(fd, "llo", 3);
+    
     close(fd);
 }
