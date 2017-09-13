@@ -185,6 +185,10 @@ static struct snd_pcm_ops snd_mychip_playback_ops = {
         .prepare =     snd_mychip_pcm_prepare,
         .trigger =     snd_mychip_pcm_trigger,
         .pointer =     snd_mychip_pcm_pointer,
+        .prepare =     snd_i2s_pcm_prepare,
+
+        // copy from user efficiently
+        .copy =        snd_i2s_pcm_copy,
 };
 
 static int snd_mychip_pcm_new(struct mychip *mychip, int device,
